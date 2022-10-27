@@ -170,7 +170,7 @@ class ExponentialMovingAverage(torch.optim.swa_utils.AveragedModel):
         super().__init__(model, device, ema_avg, use_buffers=True)
 
 
-def accuracy(output, target, topk=(1,)):
+def accuracy(output, target, topk=(1,3)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
     with torch.inference_mode():
         maxk = max(topk)

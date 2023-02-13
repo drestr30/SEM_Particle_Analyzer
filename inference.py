@@ -77,15 +77,19 @@ if __name__ == "__main__":
     import os
     import cv2 as cv
     from PIL import Image
+    import matplotlib.pyplot as plt
 
     TRAIN_DATA_PATH = "/media/lecun/HD/Expor2/ParticlesDB/folders/val/Mineral"
     list_im = os.listdir(TRAIN_DATA_PATH)
-    img = Image.open(os.path.join(TRAIN_DATA_PATH, list_im[0]), mode='RGB')
+    img = Image.open(os.path.join(TRAIN_DATA_PATH, list_im[0])).convert('RGB')
+
+    plt.imshow(np.array(img))
+    plt.show()
 
     model = InferenceModel(model_path, labels)
 
     preds = clasiffy_img(img, model)
-    print(preds)
+    print(dict(zip(labels,preds[0])))
 
 
 

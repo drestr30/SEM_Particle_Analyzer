@@ -1,6 +1,7 @@
 import torch
 from torchvision.transforms import autoaugment, transforms
 from torchvision.transforms.functional import InterpolationMode
+from torchvision.transforms import Grayscale
 
 
 class ClassificationPresetTrain:
@@ -16,6 +17,7 @@ class ClassificationPresetTrain:
         ra_magnitude=9,
         augmix_severity=3,
         random_erase_prob=0.0,
+        grayscale=False
     ):
         trans = [transforms.RandomResizedCrop(crop_size, interpolation=interpolation)]
         if hflip_prob > 0:
@@ -34,11 +36,18 @@ class ClassificationPresetTrain:
             [
                 transforms.PILToTensor(),
                 transforms.ConvertImageDtype(torch.float),
-                transforms.Normalize(mean=mean, std=std),
             ]
         )
+
+        if grayscale:
+            trans.append(transforms.Grayscale())
+        else:
+            trans.append(transforms.Normalize(mean=mean, std=std))
+
         if random_erase_prob > 0:
             trans.append(transforms.RandomErasing(p=random_erase_prob))
+
+
 
         self.transforms = transforms.Compose(trans)
 

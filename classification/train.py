@@ -118,10 +118,11 @@ def _get_cache_path(filepath):
 def load_data(traindir, valdir, args):
     # Data loading code
     print("Loading data")
-    val_resize_size, val_crop_size, train_crop_size = (
+    val_resize_size, val_crop_size, train_crop_size, grayscale = (
         args.val_resize_size,
         args.val_crop_size,
         args.train_crop_size,
+        args.grayscale
     )
     interpolation = InterpolationMode(args.interpolation)
 
@@ -146,6 +147,7 @@ def load_data(traindir, valdir, args):
                 random_erase_prob=random_erase_prob,
                 ra_magnitude=ra_magnitude,
                 augmix_severity=augmix_severity,
+                grayscale=grayscale
             ),
         )
         if args.cache_dataset:
@@ -398,7 +400,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "-b", "--batch-size", default=32, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
-    parser.add_argument("--epochs", default=5, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--epochs", default=10, type=int, metavar="N", help="number of total epochs to run")
     parser.add_argument(
         "-j", "--workers", default=8, type=int, metavar="N", help="number of data loading workers (default: 16)"
     )
@@ -447,7 +449,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma")
     parser.add_argument("--lr-min", default=0.0, type=float, help="minimum lr of lr schedule (default: 0.0)")
     parser.add_argument("--print-freq", default=10, type=int, help="print frequency")
-    parser.add_argument("--output-dir", default="./models", type=str, help="path to save outputs")
+    parser.add_argument("--output-dir", default="./classification/models", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument(
@@ -517,6 +519,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--weights", default=None, type=str, help="the weights enum name to load")
     parser.add_argument("--distributed", default=False, type=bool,
                         help="if distributed in multiple gpu")
+    parser.add_argument("--grayscale", default=None, type=bool, help="True if image is grayscale")
     return parser
 
 

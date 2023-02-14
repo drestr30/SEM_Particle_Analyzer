@@ -1,0 +1,226 @@
+import cv2 as cv
+import numpy as np
+from skimage.measure import label, regionprops
+
+def detect_and_crop(img):
+    """
+    Detects objects in an input image and crops them.
+
+    Args:
+        img (numpy.ndarray): An input image represented as a numpy array.
+
+    Returns:
+        Tuple[numpy.ndarray, numpy.ndarray]: A tuple of two elements.
+        The first element is a listof cropped images, where each image
+        contains a detected object from the input image.
+        The second element is a binary mask of the input image, used to
+        detect the objects.
+    """
+    
+    img = remove_sem_label(img)
+    mask = smooth_and_trhesh(img)
+    mask = apply_morph(mask, dilate= 0, closing= 0)
+    bboxes, mask = detect_from_mask(mask)
+    crops = []
+    for box in bboxes:
+        cropped = crop_box(img, points2bbox(box))
+
+        if False:   # This is done when no
+            cropped_mask = crop_box(mask, points2bbox(bboxes[i]))
+            cropped = crop_mask(cropped, cropped_mask, square= False)
+
+        cropped = gray2rgb(cropped).astype(np.uint8)
+        crops.append(cropped)
+
+    return crops, mask
+
+def gray2rgb(gray):
+    """
+    Converts a 2D grayscale image to a 3D RGB image.
+
+    Args:
+        gray (numpy.ndarray): A 2D grayscale image represented as a numpy array.
+
+    Returns:
+        numpy.ndarray: A 3D RGB image represented as a numpy array with the same height and width
+            as the input image, where all three color channels are set to the same value as the
+            input image's pixel intensities.
+    """
+    h, w = gray.shape
+    img = np.zeros((h, w, 3))
+    img[:, :, 0] = gray
+    img[:, :, 1] = gray
+    img[:, :, 2] = gray
+    return img
+
+def remove_sem_label(img):
+    """
+    This function removes the label in the bottom part of the image, SEM images are original squared,
+    the label is at the bottom of the image.
+    
+    Args:
+    img (numpy.ndarray): The input image.
+    
+    Returns:
+    numpy.ndarray: sem image without the bottom label. 
+    """
+    h, w = img.shape
+    output = img[:w, :]  # image is square, lower portion is removed cliping
+    return output
+
+def smooth_and_trhesh(img, kernel=None):
+    """
+    This function applies a smoothing filter to an image and then applies a binary inverse threshold to the filtered image.
+    
+    Args:
+    img (numpy.ndarray): The input image.
+    kernel (numpy.ndarray, optional): The smoothing filter to be applied. If not provided, a 5x5 average filter will be used.
+    
+    Returns:
+    numpy.ndarray: The binary inverse thresholded image after smoothing.
+    
+    Example:
+    >>> import cv2
+    >>> img = cv2.imread("image.jpg", 0)
+    >>> smooth_and_thresh(img)
+    """
+    if not kernel:
+        # Creating the kernel with numpy
+        kernel = np.ones((5, 5), np.float32)/25
+
+    # Applying the filter
+    smoothimg = cv.filter2D(src=img, ddepth=-1, kernel=kernel)
+    _, smooththresh = cv.threshold(smoothimg, 127, 255, cv.THRESH_BINARY_INV)
+    return smooththresh
+
+def apply_morph(img, dilate = 0, closing = 0 ): 
+    """
+    Applies morphological operations on an image using OpenCV library.
+
+    Parameters:
+        img (np.array): Input image
+        dilate (int, optional): Number of iterations for dilation operation. Default is 0.
+        closing (int, optional): Number of iterations for closing operation. Default is 0.
+
+    Returns:
+        np.array: The processed image.
+    """
+    
+    open_k = np.ones((5, 5), np.uint8)
+    close_k = np.ones((9,9), np.uint8)
+    
+    morphed = cv.morphologyEx(img, cv.MORPH_OPEN, open_k)  # opening removes small dots in the image.
+
+    morphed = cv.dilate(morphed, open_k, iterations=dilate)  # dilatation increase mask size.
+
+    for i in range(closing):
+        morphed = cv.morphologyEx(morphed, cv.MORPH_CLOSE, close_k)
+    
+    return morphed
+
+def detect_from_mask(im):
+    """
+    This function detects objects in an image given a binary mask. The binary mask
+    is processed to obtain connected components, which are then used to draw bounding boxes
+    around the objects. The function returns both the bounding boxes and the image with the
+    bounding boxes drawn.
+    
+    Args:
+    im (np.ndarray): A binary mask of the same size as the original image, with objects
+                     represented as white pixels and background represented as black pixels.
+                     
+    Returns:
+    list: A list of bounding boxes, each represented as a 4-tuple (y1, x1, y2, x2), where
+          (y1, x1) and (y2, x2) are the (row, column) coordinates of the top-left and bottom-right
+          corners of the bounding box, respectively.
+    np.ndarray: The original image with the bounding boxes drawn.
+    
+    Example:
+    >>> im = np.zeros((10, 10), dtype=np.uint8)
+    >>> im[2:7, 2:7] = 255
+    >>> boxes, display = detect_from_mask(im)
+    >>> boxes
+    [(2, 2, 7, 7)]
+    >>> display.shape
+    (10, 10)
+    """
+    lbl_0 = label(im) 
+    props = regionprops(lbl_0)
+    display = im.copy()
+    boxes = []
+    for ids, prop in enumerate(props):
+        _ = cv.rectangle(display, (prop.bbox[1], prop.bbox[0]), (prop.bbox[3], prop.bbox[2]), (255, 0, 0), 2)
+        _ = cv.putText(img = display,
+                      text = str(ids),
+                      org =  (prop.bbox[1], prop.bbox[0]),
+                      fontFace = cv.FONT_HERSHEY_DUPLEX,
+                      fontScale = 2.0,
+                      color = (125, 246, 55),
+                      thickness = 3)
+        boxes.append(prop.bbox)
+    
+    return boxes, display
+
+def points2bbox(points):
+    """
+    This function converts a set of points (y1, x1, y2, x1) representing a bounding box into the format
+    (x, y, width, height), where (x, y) is the top-left corner of the bounding box.
+
+    Args:
+    points (tuple): A 4-tuple (y1, x1, y2, x2), where (y1, x1) and (y2, x2) are the 
+                    (row, column) coordinates of the top-left and bottom-right corners
+                    of the bounding box, respectively.
+
+    Returns:
+    tuple: A 4-tuple (x, y, width, height) representing the bounding box.
+    """
+    y1, x1, y2, x2 = points
+    x = x1
+    y = y1 
+    w = x2 - x1
+    h = y2 - y1
+    return (x, y, w, h)
+
+def crop_mask(sample, mask, square=True):
+    """
+    This function crops a sample image based on a given binary mask.
+    
+    Args:
+    sample (numpy.ndarray): The input sample image.
+    mask (numpy.ndarray): The binary mask used for cropping.
+    square (bool, optional): If True, the output image will have a square shape. 
+    If False, the output image will have the same shape as the mask. Default is True.
+    
+    Returns:
+    numpy.ndarray: The cropped image.
+    
+    Example:
+    >>> import numpy as np
+    >>> sample = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    >>> mask = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
+    >>> crop_mask(sample, mask)
+    array([[5]])
+    """
+    segmented = np.multiply(sample, mask)
+    nzero = np.nonzero(segmented)
+    top, bottom = np.min(nzero[0]), np.max(nzero[0])
+    left, right = np.min(nzero[1]), np.max(nzero[1])
+    
+    if square:
+        out = sample[top:bottom + 1, left:right + 1]
+    else:
+        out = segmented[top:bottom + 1, left:right + 1]
+    return out
+
+def crop_box(img, bbox):
+    x, y, w, h = bbox
+    crop = img[y:y+h,x:x+w]
+    return crop
+
+if __name__ == '__main__':
+    path = '/media/lecun/HD/Expor2/Test images/EAFIT1 EAFIT0014.tif'
+    sem_img = cv.imread(path, 0)
+    particles = detect_and_crop(sem_img)
+    print(len(particles))
+    # for i, particle in enumerate(particles):
+    #     cv.imwrite(f'.\detected\particle_{str(i)}.png', particle)

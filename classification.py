@@ -5,17 +5,18 @@ from torchvision import transforms
 from torchvision.models import resnet18
 
 labels = ['Biogenic_Organic', 'Metallic', 'Mineral', 'Tire wear']
-model_path = '/media/lecun/HD/Expor2/Particle-classifier/classification/models/export2_model.pth'
+model_path = '/media/lecun/HD/Expor2/Particle-classifier/classificator/models/export2_model.pth'
 
 def clasiffy_img(img, model):
     preprocesing = get_preprocessing()
     _input = preprocesing(img).unsqueeze(dim=0)
-    pred = model(_input)
+    pred = model(_input).cpu().numpy()
     return pred
 
 def get_preprocessing(mean=(0.485, 0.456, 0.406),
                       std=(0.229, 0.224, 0.225)):
         return transforms.Compose([
+            transforms.ToPILImage(),
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.ConvertImageDtype(torch.float),
@@ -76,16 +77,11 @@ class ResNet18(nn.Module):
 if __name__ == "__main__":
     import os
     import cv2 as cv
-    from PIL import Image
-    import matplotlib.pyplot as plt
 
-    TRAIN_DATA_PATH = "/media/lecun/HD/Expor2/ParticlesDB/folders/val/Mineral"
+    TRAIN_DATA_PATH = "/media/lecun/HD/Expor2/ParticlesDB/folders/val/Tire wear"
     list_im = os.listdir(TRAIN_DATA_PATH)
-    img = Image.open(os.path.join(TRAIN_DATA_PATH, list_im[0])).convert('RGB')
 
-    plt.imshow(np.array(img))
-    plt.show()
-
+    img = cv.imread(os.path.join(TRAIN_DATA_PATH, list_im[0]))
     model = InferenceModel(model_path, labels)
 
     preds = clasiffy_img(img, model)

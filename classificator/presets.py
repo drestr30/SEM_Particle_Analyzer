@@ -64,17 +64,20 @@ class ClassificationPresetEval:
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),
         interpolation=InterpolationMode.BILINEAR,
+        grayscale=False
     ):
-
-        self.transforms = transforms.Compose(
-            [
+        trans = [
                 transforms.Resize(resize_size, interpolation=interpolation),
                 transforms.CenterCrop(crop_size),
                 transforms.PILToTensor(),
                 transforms.ConvertImageDtype(torch.float),
-                transforms.Normalize(mean=mean, std=std),
             ]
-        )
+        if grayscale:
+            trans.append(transforms.Grayscale())
+        else:
+            trans.append(transforms.Normalize(mean=mean, std=std))
+
+        self.transforms = transforms.Compose(transforms=trans)
 
     def __call__(self, img):
         return self.transforms(img)

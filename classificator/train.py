@@ -5,7 +5,7 @@ import warnings
 
 import presets
 import torch
-import torch.utils.data
+from torch.utils.data import DataLoader, WeightedRandomSampler
 import torchvision
 import transforms
 import utils
@@ -14,7 +14,12 @@ from torch import nn
 from torch.utils.data.dataloader import default_collate
 from torchvision.transforms.functional import InterpolationMode
 from sklearn.metrics import confusion_matrix, classification_report
-
+from xception import MiniXception
+import numpy as np
+from test import test
+from board import write_batch_to_board, write_pr_to_board, \
+            write_cm_to_board, write_report_to_board, start_tensor_board, \
+            write_roc_to_board
 
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
     model.train()
@@ -58,8 +63,10 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
         metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
 
+    writer.add_scalar('Loss/train', metric_logger.meters['loss'].global_avg, epoch)
+    writer.add_scalar('Accuracy/train', metric_logger.meters['acc1'].global_avg, epoch)
 
-def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix=""):
+def evaluate(model, criterion, data_loader, device, epoch=None, print_freq=100, log_suffix=""):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = f"Test: {log_suffix}"
@@ -82,7 +89,7 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
             num_processed_samples += batch_size
 
             # appends output and preds for confusion matix
-            [outputs.append(o.cpu().item()) for o in output.argmax(dim=1)]
+            [outputs.append(o.cpu().numpy()) for o in output]
             [targets.append(t.cpu().item()) for t in target]
     # gather the stats from all processes
 
@@ -103,7 +110,11 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     metric_logger.synchronize_between_processes()
 
     print(f"{header} Acc@1 {metric_logger.acc1.global_avg:.3f} Acc@5 {metric_logger.acc5.global_avg:.3f}")
-    return outputs, targets #metric_logger.acc1.global_avg
+
+    if epoch is not None:
+        writer.add_scalar('Loss/validation', metric_logger.meters['loss'].global_avg, epoch)
+        writer.add_scalar('Accuracy/validation', metric_logger.acc1.global_avg, epoch)
+    return metric_logger.acc1.global_avg, outputs, targets #metric_logger.acc1.global_avg
 
 
 def _get_cache_path(filepath):
@@ -168,7 +179,8 @@ def load_data(traindir, valdir, args):
             preprocessing = weights.transforms()
         else:
             preprocessing = presets.ClassificationPresetEval(
-                crop_size=val_crop_size, resize_size=val_resize_size, interpolation=interpolation
+                crop_size=val_crop_size, resize_size=val_resize_size,
+                interpolation=interpolation, grayscale=grayscale
             )
 
         dataset_test = torchvision.datasets.ImageFolder(
@@ -188,15 +200,31 @@ def load_data(traindir, valdir, args):
             train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
         test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test, shuffle=False)
     else:
-        train_sampler = torch.utils.data.RandomSampler(dataset)
+        if args.balance:
+            _, class_counts = np.unique(dataset.targets, return_counts=True)
+            weights = 1. / torch.tensor(class_counts, dtype=torch.float)
+            print(class_counts)
+            samples_weights = torch.from_numpy(
+                np.array([weights[t] for t in dataset.targets]))
+
+            train_sampler = WeightedRandomSampler(
+                weights=samples_weights,
+                num_samples=len(samples_weights),
+                replacement=True)
+        else:
+            train_sampler = torch.utils.data.RandomSampler(dataset)
+
         test_sampler = torch.utils.data.SequentialSampler(dataset_test)
 
     return dataset, dataset_test, train_sampler, test_sampler
 
-
 def main(args):
     if args.output_dir:
         utils.mkdir(args.output_dir)
+
+    # default `log_dir` is "runs" - we'll be more specific here
+    global writer
+    writer = start_tensor_board(args)
 
     #utils.init_distributed_mode(args)
     #print(args)
@@ -238,9 +266,19 @@ def main(args):
         dataset_test, batch_size=args.batch_size, sampler=test_sampler, num_workers=args.workers, pin_memory=True
     )
 
+    one_batch = next(iter(data_loader))
+    _, counts = np.unique(one_batch[1], return_counts=True)
+    print('class distribution of one batch: ', dict(zip(dataset.classes, counts)))
+
+    write_batch_to_board(data_loader, writer)
+
     print("Creating model")
     #model = torchvision.models.get_model(args.model, weights=args.weights, num_classes=num_classes) torchvision 0.15
-    model = torchvision.models.__dict__[args.model](weights=args.weights, num_classes=num_classes)
+
+    if args.model == 'xception-m':
+        model = MiniXception(num_classes)
+    else:
+        model = torchvision.models.__dict__[args.model](weights=args.weights, num_classes=num_classes)
     model.to(device)
 
     if args.distributed and args.sync_bn:
@@ -352,21 +390,23 @@ def main(args):
         if model_ema:
             evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA")
         else:
-            out, target = evaluate(model, criterion, data_loader_test, device=device)
+            out_probs, target = evaluate(model, criterion, data_loader_test, device=device)
+            out = [o.argmax(dim=1) for o in out_probs]
             print(confusion_matrix(out, target))
             print(classification_report(out, target, target_names=dataset_test.classes))
         return
 
     print("Start training")
     start_time = time.time()
+    best_acc = 0.0
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
         lr_scheduler.step()
-        evaluate(model, criterion, data_loader_test, device=device)
+        acc, _, _ = evaluate(model, criterion, data_loader_test, device=device, epoch= epoch)
         if model_ema:
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA")
+            evaluate(model_ema, criterion, data_loader_test, epoch=epoch, device=device, log_suffix="EMA")
         if args.output_dir:
             checkpoint = {
                 "model": model_without_ddp.state_dict(),
@@ -379,13 +419,24 @@ def main(args):
                 checkpoint["model_ema"] = model_ema.state_dict()
             if scaler:
                 checkpoint["scaler"] = scaler.state_dict()
-            utils.save_on_master(checkpoint, os.path.join(args.output_dir, f"{args.outname}_{epoch}.pth"))
+
+            if acc > best_acc:
+                utils.save_on_master(checkpoint, os.path.join(args.output_dir, f"{args.outname}_best.pth"))
+                best_acc = acc
             utils.save_on_master(checkpoint, os.path.join(args.output_dir,
                                                           f"{args.outname}_checkpoint.pth"))
+    #Test model for tensor board
+    _, predictions, targets = evaluate(model, criterion, data_loader_test, device=device)
 
+    write_cm_to_board(predictions, targets, dataset.classes, writer)
+    write_report_to_board(predictions, targets, dataset.classes, writer)
+    write_pr_to_board(predictions, targets, dataset.classes, writer)
+    write_roc_to_board(predictions, targets, dataset.classes, writer)
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print(f"Training time {total_time_str}")
+
+    writer.close()
 
 
 def get_args_parser(add_help=True):
@@ -449,7 +500,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma")
     parser.add_argument("--lr-min", default=0.0, type=float, help="minimum lr of lr schedule (default: 0.0)")
     parser.add_argument("--print-freq", default=10, type=int, help="print frequency")
-    parser.add_argument("--output-dir", default="./classification/models", type=str, help="path to save outputs")
+    parser.add_argument("--output-dir", default="./models", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument(
@@ -470,7 +521,8 @@ def get_args_parser(add_help=True):
         help="Only test the model",
         action="store_true",
     )
-    parser.add_argument("--auto-augment", default=None, type=str, help="auto augment policy (default: None)")
+    parser.add_argument("--balance", default=None, type=bool, help="apply WeightedRandomSampler to upsample minority class.")
+    parser.add_argument("--auto-augment", default='ra', type=str, help="auto augment policy (default: None)")
     parser.add_argument("--ra-magnitude", default=9, type=int, help="magnitude of auto augment policy")
     parser.add_argument("--augmix-severity", default=3, type=int, help="severity of augmix policy")
     parser.add_argument("--random-erase", default=0.0, type=float, help="random erasing probability (default: 0.0)")
@@ -519,7 +571,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--weights", default=None, type=str, help="the weights enum name to load")
     parser.add_argument("--distributed", default=False, type=bool,
                         help="if distributed in multiple gpu")
-    parser.add_argument("--grayscale", default=None, type=bool, help="True if image is grayscale")
+    parser.add_argument("--grayscale", default=False, type=bool, help="True if image is grayscale")
     return parser
 
 

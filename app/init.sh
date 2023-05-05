@@ -2,7 +2,7 @@
 set -e
 
 ## docker creation
-docker build -t export2_img .
+#docker build -t export2_img .
 
 ## run container
 docker run --rm \

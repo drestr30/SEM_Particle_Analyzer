@@ -3,23 +3,40 @@ import numpy as np
 from torch import nn
 from torchvision import transforms
 from torchvision.models import resnet18
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision.datasets import ImageFolder
 from sklearn.metrics import classification_report, confusion_matrix
+from torchsummary import summary
+from xception import MiniXception
 
 labels = ['Biogenic_Organic', 'Metallic', 'Mineral', 'Tire wear']
-model_path = '/media/lecun/HD/Expor2/Particle-classifier/classification/models/export2_model.pth'
+model_path = "/media/lecun/HD/Expor2/Particle-classifier/classificator/models/minixception_checkpoint.pth"
+#'/media/lecun/HD/Expor2/Particle-classifier/classificator/models/export2_model.pth'
 
 def main():
     TRAIN_DATA_PATH = "/media/lecun/HD/Expor2/ParticlesDB/folders/val/"
 
     test_data = ImageFolder(root=TRAIN_DATA_PATH,
                             transform=get_preprocessing())
-    test_loader = DataLoader(test_data, batch_size=32,
-                             shuffle=True, num_workers=4)
+
+    _, class_counts = np.unique(test_data.targets, return_counts=True)
+    weights = 1. / torch.tensor(class_counts, dtype=torch.float)
+    print(class_counts)
+    samples_weights = torch.from_numpy(np.array([weights[t] for t in test_data.targets]))
+
+    sampler = WeightedRandomSampler(
+        weights=samples_weights,
+        num_samples=len(samples_weights),
+        replacement=True)
+
+    test_loader = DataLoader(test_data, batch_size=16,
+                             shuffle=False, num_workers=4, sampler=sampler)
 
     one_batch = next(iter(test_loader))
+    print(np.unique(one_batch[1], return_counts=True))
+
     model = InferenceModel(model_path, labels)
+    print(summary(model.classifier))
     true_labels, pred_probs = test(test_loader, model)
     pred_labels = np.argmax(pred_probs, axis=-1)
 
@@ -37,29 +54,31 @@ def main():
 def get_preprocessing(mean=(0.485, 0.456, 0.406),
                       std=(0.229, 0.224, 0.225)):
         return transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize((48, 48)),
+            transforms.Grayscale(),
             transforms.ToTensor(),
-            transforms.ConvertImageDtype(torch.float),
-            transforms.Normalize(mean=mean, std=std),
+            # transforms.ConvertImageDtype(torch.float),
+
+            # transforms.Normalize(mean=mean, std=std),
         ])
 
 def test(test_loader, model):
 
     targets = torch.autograd.Variable().cuda()
     predictions = torch.autograd.Variable().cuda()
+    with torch.inference_mode():
+        for i, (input, target) in enumerate(test_loader):
+            if i > int(len(test_loader)):
+                break
 
-    for i, (input, target) in enumerate(test_loader):
-        if i > int(len(test_loader)):
-            break
+            input, target = input.cuda(), target.float().cuda()
+            output = model(input)
 
-        input, target = input.cuda(), target.float().cuda()
-        output = model(input)
+            targets = torch.cat((targets, target), 0)
+            predictions = torch.cat((predictions, output.float()), 0)
 
-        targets = torch.cat((targets, target), 0)
-        predictions = torch.cat((predictions, output.float()), 0)
-
-    targets = targets.cpu().numpy()
-    predictions = predictions.cpu().numpy()
+        targets = targets.cpu().numpy()
+        predictions = predictions.detach().cpu().numpy()
 
     return targets, predictions
 
@@ -67,19 +86,21 @@ class InferenceModel():
     """ Class for hosting model and perform infenrece on images"""
 
     def __init__(self, model_path = None, labels= None):
-        self.classifier = ResNet18(len(labels))
-
-        if model_path is not None:
-            checkpoint = torch.load(model_path)  # , map_location=device)
-            state_dict = checkpoint['model']
-            self.classifier.model.load_state_dict(state_dict)
-
-        self.classifier.eval()
         if torch.cuda.is_available():
             device = 'cuda'
         else:
             device = 'cpu'
         self.device = device
+
+        # self.classifier = ResNet18(len(labels))
+        self.classifier = MiniXception(len(labels))
+        if model_path is not None:
+            checkpoint = torch.load(model_path, map_location=device)
+            state_dict = checkpoint['model']
+            self.classifier.load_state_dict(state_dict)
+
+        self.classifier.eval()
+
         self.classifier.to(self.device)
 
     def __call__(self, input_tensor):

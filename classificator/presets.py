@@ -41,7 +41,7 @@ class ClassificationPresetTrain:
 
         if grayscale:
             trans.append(transforms.Grayscale())
-        else:
+        elif mean and std:
             trans.append(transforms.Normalize(mean=mean, std=std))
 
         if random_erase_prob > 0:
@@ -74,7 +74,8 @@ class ClassificationPresetEval:
             ]
         if grayscale:
             trans.append(transforms.Grayscale())
-        else:
+
+        elif mean and std:
             trans.append(transforms.Normalize(mean=mean, std=std))
 
         self.transforms = transforms.Compose(transforms=trans)

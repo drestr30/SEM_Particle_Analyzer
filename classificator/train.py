@@ -21,6 +21,13 @@ from board import write_batch_to_board, write_pr_to_board, \
             write_cm_to_board, write_report_to_board, start_tensor_board, \
             write_roc_to_board
 
+import os
+
+if torch.cuda.is_available():
+    print('CUDA is available.')
+else:
+    print('CUDA is not available.')
+
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -129,11 +136,13 @@ def _get_cache_path(filepath):
 def load_data(traindir, valdir, args):
     # Data loading code
     print("Loading data")
-    val_resize_size, val_crop_size, train_crop_size, grayscale = (
+    val_resize_size, val_crop_size, train_crop_size, grayscale, mean, std = (
         args.val_resize_size,
         args.val_crop_size,
         args.train_crop_size,
-        args.grayscale
+        args.grayscale,
+        args.mean,
+        args.std
     )
     interpolation = InterpolationMode(args.interpolation)
 
@@ -152,6 +161,8 @@ def load_data(traindir, valdir, args):
         dataset = torchvision.datasets.ImageFolder(
             traindir,
             presets.ClassificationPresetTrain(
+                mean=mean,
+                std=std,
                 crop_size=train_crop_size,
                 interpolation=interpolation,
                 auto_augment_policy=auto_augment_policy,
@@ -180,7 +191,8 @@ def load_data(traindir, valdir, args):
         else:
             preprocessing = presets.ClassificationPresetEval(
                 crop_size=val_crop_size, resize_size=val_resize_size,
-                interpolation=interpolation, grayscale=grayscale
+                interpolation=interpolation, grayscale=grayscale,
+                mean=mean, std=std
             )
 
         dataset_test = torchvision.datasets.ImageFolder(
@@ -267,10 +279,11 @@ def main(args):
     )
 
     one_batch = next(iter(data_loader))
+    print(one_batch[0].shape)
     _, counts = np.unique(one_batch[1], return_counts=True)
     print('class distribution of one batch: ', dict(zip(dataset.classes, counts)))
 
-    write_batch_to_board(data_loader, writer)
+    write_batch_to_board(data_loader, args.grayscale, writer)
 
     print("Creating model")
     #model = torchvision.models.get_model(args.model, weights=args.weights, num_classes=num_classes) torchvision 0.15
@@ -572,6 +585,10 @@ def get_args_parser(add_help=True):
     parser.add_argument("--distributed", default=False, type=bool,
                         help="if distributed in multiple gpu")
     parser.add_argument("--grayscale", default=False, type=bool, help="True if image is grayscale")
+    parser.add_argument("--mean", default=None, type=float,
+                        help="Mean of train database, float or tuple for RGB.")
+    parser.add_argument("--std", default=None, type=float,
+                        help="Standart deviation of train database, float or tuple for RGB.")
     return parser
 
 

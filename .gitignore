@@ -133,3 +133,6 @@ models/
 
 #IDEA
 .idea/
+
+#tensorboard runs
+runs/

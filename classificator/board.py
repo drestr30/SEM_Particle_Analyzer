@@ -10,9 +10,9 @@ import json
 #helper function to show an image
 # (used in the `plot_classes_preds` function below)
 def matplotlib_imshow(img, one_channel=False):
-    if one_channel:
-        img = img.mean(dim=0)
-    img = img / 2 + 0.5     # unnormalize
+    # if one_channel:
+    #     img = img.mean(dim=0)
+    # img = img / 2 + 0.5     # unnormalize
     npimg = img.numpy()
     if one_channel:
         plt.imshow(npimg, cmap="Greys")
@@ -20,13 +20,15 @@ def matplotlib_imshow(img, one_channel=False):
         plt.imshow(np.transpose(npimg, (1, 2, 0)))
 
 # get some random training images
-def write_batch_to_board(trainloader, writer):
+def write_batch_to_board(trainloader,grayscale, writer):
     dataiter = iter(trainloader)
     images, labels = next(dataiter)
-    # create grid of images
+    # create grid of images}
+    print(images.shape)
     img_grid = torchvision.utils.make_grid(images)
+    print(img_grid.shape)
     # show images
-    matplotlib_imshow(img_grid, one_channel=True)
+    matplotlib_imshow(img_grid, one_channel=False)
     # write to tensorboard
     writer.add_image('Random Training batch', img_grid)
 #
@@ -103,6 +105,17 @@ def write_report_to_board(probs, trues, classes, writer):
                     format_classification_report("Class "+ report))
 
 
+def write_pr_to_board(probs, trues, classes, writer):
+    probs = np.asarray(probs)
+    trues = np.asarray(trues)
+
+    true_encoded = np.zeros((trues.size, trues.max() + 1))
+    true_encoded[np.arange(trues.size), trues] = 1
+
+    pr_plot = plot_pr_curve(probs, true_encoded, classes)
+    writer.add_figure('Precision Vs Recall', pr_plot)
+
+
 def plot_pr_curve(pred_classes, true_classes, class_labels):
     # For each class
     n_classes = np.shape(pred_classes)[1]
@@ -110,6 +123,7 @@ def plot_pr_curve(pred_classes, true_classes, class_labels):
     recall = dict()
     average_precision = dict()
     for i in range(n_classes):
+
         precision[i], recall[i], _ = precision_recall_curve(true_classes[:, i],
                                                             pred_classes[:, i])
         average_precision[i] = average_precision_score(true_classes[:, i], pred_classes[:, i])
@@ -156,10 +170,6 @@ def plot_pr_curve(pred_classes, true_classes, class_labels):
     plt.legend(lines, labels, loc=(0, -.38), prop=dict(size=14))
     # plt.show()
     return fig
-
-def write_pr_to_board(probs, trues, classes, writer):
-    pr_plot = plot_pr_curve(probs, trues, classes)
-    writer.add_figure('Precision Vs Recall', pr_plot)
 
 def compute_AUCs(gt, pred):
     """Computes Area Under the Curve (AUC) from prediction scores.
@@ -240,5 +250,11 @@ def plot_roc_curve(pred_classes, true_classes, class_labels):
     return fig
 
 def write_roc_to_board(probs, trues, classes, writer):
-    pr_plot = plot_roc_curve(probs, trues, classes)
-    writer.add_figure('Precision Vs Recall', pr_plot)
+    probs = np.asarray(probs)
+    trues = np.asarray(trues)
+
+    true_encoded = np.zeros((trues.size, trues.max() + 1))
+    true_encoded[np.arange(trues.size), trues] = 1
+
+    pr_plot = plot_roc_curve(probs, true_encoded, classes)
+    writer.add_figure('ROC Curve', pr_plot)

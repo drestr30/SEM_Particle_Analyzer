@@ -20,7 +20,7 @@ def get_preprocessing(mean=(0.485, 0.456, 0.406),
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.ConvertImageDtype(torch.float),
-            transforms.Normalize(mean=mean, std=std),
+            # transforms.Normalize(mean=mean, std=std),
         ])
 
 class InferenceModel():

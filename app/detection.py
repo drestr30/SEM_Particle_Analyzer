@@ -1,8 +1,9 @@
 import cv2 as cv
 import numpy as np
-from skimage.measure import label, regionprops
+from skimage.measure import label, regionprops, regionprops_table
+import argparse
 
-def detect_and_crop(img):
+def detect_and_crop(img, **args):
     """
     Detects objects in an input image and crops them.
 
@@ -16,23 +17,43 @@ def detect_and_crop(img):
         The second element is a binary mask of the input image, used to
         detect the objects.
     """
-    
-    img = remove_sem_label(img)
-    mask = smooth_and_trhesh(img)
-    mask = apply_morph(mask, dilate= 0, closing= 0)
-    bboxes, mask = detect_from_mask(mask)
+    img = remove_sem_label(img, crop_h=args.get('crop_h', None))
+    mask = create_mask(img, **args)
+
+    lbl_0 = label(mask)
+    bboxes, mask = detect_from_mask(lbl_0, mask)
+
+    props = create_props_table(lbl_0, img)
+
     crops = []
-    for box in bboxes:
+    display = img.copy()
+    for ids, box in enumerate(bboxes):
         cropped = crop_box(img, points2bbox(box))
 
-        if False:   # This is done when no
+        if False: # This is done when selecting segmentation instead of crop
             cropped_mask = crop_box(mask, points2bbox(bboxes[i]))
             cropped = crop_mask(cropped, cropped_mask, square= False)
+
+        _ = cv.rectangle(display, (box[1], box[0]),
+                         (box[3], box[2]), (255, 0, 0), 2)
+        _ = cv.putText(img=display,
+                       text=str(ids),
+                       org=(box[1], box[0]),
+                       fontFace=cv.FONT_HERSHEY_DUPLEX,
+                       fontScale=2.0,
+                       color=(255, 23, 55),
+                       thickness=3)
 
         cropped = gray2rgb(cropped).astype(np.uint8)
         crops.append(cropped)
 
-    return crops, mask
+    return crops, props, mask, display
+
+
+def create_mask(img, **args):
+    mask = smooth_and_trhesh(img, threshold=args.get('threshold'))
+    mask = apply_morph(mask, dilate=0, closing=0)
+    return mask
 
 def gray2rgb(gray):
     """
@@ -53,7 +74,7 @@ def gray2rgb(gray):
     img[:, :, 2] = gray
     return img
 
-def remove_sem_label(img):
+def remove_sem_label(img, crop_h: int =None):
     """
     This function removes the label in the bottom part of the image, SEM images are original squared,
     the label is at the bottom of the image.
@@ -64,11 +85,15 @@ def remove_sem_label(img):
     Returns:
     numpy.ndarray: sem image without the bottom label. 
     """
-    h, w = img.shape
-    output = img[:w, :]  # image is square, lower portion is removed cliping
+    if crop_h:
+        h, w = img.shape
+        output = img[:h - crop_h]  # image is square, lower portion is removed cliping
+    else: #if micrograph is square
+        h, w = img.shape
+        output = img[:w, :]
     return output
 
-def smooth_and_trhesh(img, kernel=None):
+def smooth_and_trhesh(img, kernel=None, threshold=127):
     """
     This function applies a smoothing filter to an image and then applies a binary inverse threshold to the filtered image.
     
@@ -90,7 +115,7 @@ def smooth_and_trhesh(img, kernel=None):
 
     # Applying the filter
     smoothimg = cv.filter2D(src=img, ddepth=-1, kernel=kernel)
-    _, smooththresh = cv.threshold(smoothimg, 127, 255, cv.THRESH_BINARY_INV)
+    _, smooththresh = cv.threshold(smoothimg, threshold, 255, cv.THRESH_BINARY_INV)
     return smooththresh
 
 def apply_morph(img, dilate = 0, closing = 0 ): 
@@ -118,7 +143,30 @@ def apply_morph(img, dilate = 0, closing = 0 ):
     
     return morphed
 
-def detect_from_mask(im):
+def create_props_table(lbl_0, intensity_image):
+
+    # lbl_0 = label(mask)
+
+    def intensity_std(region, intensities):
+        # note the ddof arg to get the sample var if you so desire!
+        return np.std(intensities[region], ddof=1)
+
+
+    props_table = regionprops_table(lbl_0, intensity_image=intensity_image,
+                                    properties=('intensity_mean',
+                                                'solidity',
+                                                'perimeter',
+                                                'feret_diameter_max',
+                                                'eccentricity',
+                                                'area',
+                                                'intensity_std',
+                                                'equivalent_diameter_area',
+                                                'axis_minor_length',
+                                                'axis_major_length'),
+                                    extra_properties=[intensity_std])
+    return props_table
+
+def detect_from_mask(lbl_0, im):
     """
     This function detects objects in an image given a binary mask. The binary mask
     is processed to obtain connected components, which are then used to draw bounding boxes
@@ -136,16 +184,17 @@ def detect_from_mask(im):
     np.ndarray: The original image with the bounding boxes drawn.
     
     Example:
-    >>> im = np.zeros((10, 10), dtype=np.uint8)
-    >>> im[2:7, 2:7] = 255
-    >>> boxes, display = detect_from_mask(im)
-    >>> boxes
+    # >>> im = np.zeros((10, 10), dtype=np.uint8)
+    # >>> im[2:7, 2:7] = 255
+    # >>> boxes, display = detect_from_mask(im)
+    # >>> boxes
     [(2, 2, 7, 7)]
-    >>> display.shape
+    # >>> display.shape
     (10, 10)
     """
-    lbl_0 = label(im) 
-    props = regionprops(lbl_0)
+    # lbl_0 = label(im)
+    props = regionprops(lbl_0, intensity_image = im)
+
     display = im.copy()
     boxes = []
     for ids, prop in enumerate(props):

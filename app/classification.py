@@ -5,7 +5,7 @@ from torchvision import transforms
 from torchvision.models import resnet18
 
 labels = ['Biogenic_Organic', 'Metallic', 'Mineral', 'Tire wear']
-model_path = './export2_model.pth'
+model_path = '/media/lecun/HD/Expor2/Particle-classifier/app/export2_model.pth'
 
 def clasiffy_img(img, model):
     preprocesing = get_preprocessing()

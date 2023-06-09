@@ -6,20 +6,27 @@ import cv2 as cv
 classifier = classification.InferenceModel(model_path=classification.model_path,
                                            labels=classification.labels)
 
-def run_detection_classification(sem_img):
-    particles, mask = detect_and_crop(sem_img)
+def run_detection(sem_img, **args):
+    crops, props, mask, display = detect_and_crop(sem_img,
+                                    crop_h=args.get('crop_h', None),
+                                    threshold=args.get('threshold', 127))
+
+    return crops, props, mask, display
+
+def run_classification(images):
     clasifications = []
-    for i, particle in enumerate(particles):
+    print(f'{len(images)} particles detected')
+    for i, particle in enumerate(images):
         clasification_dict = {}
         probs = classification.clasiffy_img(particle, classifier)
         max_prob = np.max(probs)
         pred_label = classification.labels[np.argmax(probs)]
 
-        clasification_dict['id'] = str(i)
+        # clasification_dict['id'] = str(i)
         clasification_dict['prob'] = max_prob
-        clasification_dict['label'] = pred_label
+        clasification_dict['group'] = pred_label
         clasifications.append(clasification_dict)
-    return clasifications, mask
+    return clasifications
 
 if __name__ == '__main__':
     import plotly.express as px

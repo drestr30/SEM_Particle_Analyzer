@@ -1,26 +1,13 @@
 import datetime
-import os
 import time
 import warnings
-
-import presets
 import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
-import torchvision
-import transforms
 import utils
-from sampler import RASampler
 from torch import nn
-from torch.utils.data.dataloader import default_collate
-from torchvision.transforms.functional import InterpolationMode
-from sklearn.metrics import confusion_matrix, classification_report
 from xception import MiniXception
-import numpy as np
-from test import test
-from board import write_batch_to_board, write_pr_to_board, \
-            write_cm_to_board, write_report_to_board, start_tensor_board, \
-            write_roc_to_board
-
+from vitabnet import  ViTabNet
+from loaders import create_dataset_loader_samplers
+from board import *
 import os
 
 if torch.cuda.is_available():
@@ -30,17 +17,26 @@ else:
 
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
     model.train()
+    model.to(device)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
     metric_logger.add_meter("img/s", utils.SmoothedValue(window_size=10, fmt="{value}"))
 
     header = f"Epoch: [{epoch}]"
-    for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
+    for i, (data, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
         start_time = time.time()
-        image, target = image.to(device), target.to(device)
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
-            output = model(image)
-            loss = criterion(output, target)
+
+        if args.vitab:
+            image, features = data[0], data[1]
+            image, target, features = image.to(device), target.to(device), features.to(device)
+            with torch.cuda.amp.autocast(enabled=scaler is not None):
+                output = model(image, features)
+        else:
+            image, target = data.to(device), target.to(device)
+
+            with torch.cuda.amp.autocast(enabled=scaler is not None):
+                output = model(image)
+        loss = criterion(output, target)
 
         optimizer.zero_grad()
         if scaler is not None:
@@ -80,10 +76,15 @@ def evaluate(model, criterion, data_loader, device, epoch=None, print_freq=100, 
     outputs, targets = list(), list()
     num_processed_samples = 0
     with torch.inference_mode():
-        for image, target in metric_logger.log_every(data_loader, print_freq, header):
-            image = image.to(device, non_blocking=True)
-            target = target.to(device, non_blocking=True)
-            output = model(image)
+        for data, target in metric_logger.log_every(data_loader, print_freq, header):
+            if args.vitab:
+                image, features = data[0], data[1]
+                image, target, features = image.to(device), target.to(
+                    device), features.to(device)
+                output = model(image, features)
+            else:
+                image, target = data.to(device), target.to(device)
+                output = model(image)
             loss = criterion(output, target)
 
             acc1, acc5 = utils.accuracy(output, target)#, topk=(1, 5))
@@ -123,113 +124,6 @@ def evaluate(model, criterion, data_loader, device, epoch=None, print_freq=100, 
         writer.add_scalar('Accuracy/validation', metric_logger.acc1.global_avg, epoch)
     return metric_logger.acc1.global_avg, outputs, targets #metric_logger.acc1.global_avg
 
-
-def _get_cache_path(filepath):
-    import hashlib
-
-    h = hashlib.sha1(filepath.encode()).hexdigest()
-    cache_path = os.path.join("~", ".torch", "vision", "datasets", "imagefolder", h[:10] + ".pt")
-    cache_path = os.path.expanduser(cache_path)
-    return cache_path
-
-
-def load_data(traindir, valdir, args):
-    # Data loading code
-    print("Loading data")
-    val_resize_size, val_crop_size, train_crop_size, grayscale, mean, std = (
-        args.val_resize_size,
-        args.val_crop_size,
-        args.train_crop_size,
-        args.grayscale,
-        args.mean,
-        args.std
-    )
-    interpolation = InterpolationMode(args.interpolation)
-
-    print("Loading training data")
-    st = time.time()
-    cache_path = _get_cache_path(traindir)
-    if args.cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print(f"Loading dataset_train from {cache_path}")
-        dataset, _ = torch.load(cache_path)
-    else:
-        auto_augment_policy = getattr(args, "auto_augment", None)
-        random_erase_prob = getattr(args, "random_erase", 0.0)
-        ra_magnitude = args.ra_magnitude
-        augmix_severity = args.augmix_severity
-        dataset = torchvision.datasets.ImageFolder(
-            traindir,
-            presets.ClassificationPresetTrain(
-                mean=mean,
-                std=std,
-                crop_size=train_crop_size,
-                interpolation=interpolation,
-                auto_augment_policy=auto_augment_policy,
-                random_erase_prob=random_erase_prob,
-                ra_magnitude=ra_magnitude,
-                augmix_severity=augmix_severity,
-                grayscale=grayscale
-            ),
-        )
-        if args.cache_dataset:
-            print(f"Saving dataset_train to {cache_path}")
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset, traindir), cache_path)
-    print("Took", time.time() - st)
-
-    print("Loading validation data")
-    cache_path = _get_cache_path(valdir)
-    if args.cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print(f"Loading dataset_test from {cache_path}")
-        dataset_test, _ = torch.load(cache_path)
-    else:
-        if args.weights and args.test_only:
-            weights = torchvision.models.get_weight(args.weights)
-            preprocessing = weights.transforms()
-        else:
-            preprocessing = presets.ClassificationPresetEval(
-                crop_size=val_crop_size, resize_size=val_resize_size,
-                interpolation=interpolation, grayscale=grayscale,
-                mean=mean, std=std
-            )
-
-        dataset_test = torchvision.datasets.ImageFolder(
-            valdir,
-            preprocessing,
-        )
-        if args.cache_dataset:
-            print(f"Saving dataset_test to {cache_path}")
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset_test, valdir), cache_path)
-
-    print("Creating data loaders")
-    if False: #args.distributed:
-        if hasattr(args, "ra_sampler") and args.ra_sampler:
-            train_sampler = RASampler(dataset, shuffle=True, repetitions=args.ra_reps)
-        else:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test, shuffle=False)
-    else:
-        if args.balance:
-            _, class_counts = np.unique(dataset.targets, return_counts=True)
-            weights = 1. / torch.tensor(class_counts, dtype=torch.float)
-            print(class_counts)
-            samples_weights = torch.from_numpy(
-                np.array([weights[t] for t in dataset.targets]))
-
-            train_sampler = WeightedRandomSampler(
-                weights=samples_weights,
-                num_samples=len(samples_weights),
-                replacement=True)
-        else:
-            train_sampler = torch.utils.data.RandomSampler(dataset)
-
-        test_sampler = torch.utils.data.SequentialSampler(dataset_test)
-
-    return dataset, dataset_test, train_sampler, test_sampler
-
 def main(args):
     if args.output_dir:
         utils.mkdir(args.output_dir)
@@ -237,9 +131,8 @@ def main(args):
     # default `log_dir` is "runs" - we'll be more specific here
     global writer
     writer = start_tensor_board(args)
-
-    #utils.init_distributed_mode(args)
-    #print(args)
+    write_args_to_board(writer, args)
+    utils.init_distributed_mode(args)
 
     device = torch.device(args.device)
 
@@ -251,47 +144,22 @@ def main(args):
 
     train_dir = os.path.join(args.data_path, "train")
     val_dir = os.path.join(args.data_path, "val")
-    dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
-    collate_fn = None
-    num_classes = len(dataset.classes)
-    mixup_transforms = []
-    if args.mixup_alpha > 0.0:
-        mixup_transforms.append(transforms.RandomMixup(num_classes, p=1.0, alpha=args.mixup_alpha))
-    if args.cutmix_alpha > 0.0:
-        mixup_transforms.append(transforms.RandomCutmix(num_classes, p=1.0, alpha=args.cutmix_alpha))
-    if mixup_transforms:
-        mixupcutmix = torchvision.transforms.RandomChoice(mixup_transforms)
-
-        def collate_fn(batch):
-            return mixupcutmix(*default_collate(batch))
-
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=train_sampler,
-        num_workers=args.workers,
-        pin_memory=True,
-        collate_fn=collate_fn,
-    )
-    data_loader_test = torch.utils.data.DataLoader(
-        dataset_test, batch_size=args.batch_size, sampler=test_sampler, num_workers=args.workers, pin_memory=True
-    )
-
-    one_batch = next(iter(data_loader))
-    print(one_batch[0].shape)
-    _, counts = np.unique(one_batch[1], return_counts=True)
-    print('class distribution of one batch: ', dict(zip(dataset.classes, counts)))
-
+    dataset, dataset_test, data_loader, data_loader_test, *_ = create_dataset_loader_samplers(train_dir, val_dir, args)
     write_batch_to_board(data_loader, args.grayscale, writer)
+    num_classes = len(dataset.classes)
 
     print("Creating model")
     #model = torchvision.models.get_model(args.model, weights=args.weights, num_classes=num_classes) torchvision 0.15
 
-    if args.model == 'xception-m':
-        model = MiniXception(num_classes)
+    if args.vitab:
+        model = ViTabNet(num_classes)
+
     else:
-        model = torchvision.models.__dict__[args.model](weights=args.weights, num_classes=num_classes)
+        if args.model == 'xception-m':
+            model = MiniXception(num_classes)
+        else:
+            model = torchvision.models.__dict__[args.model](weights=args.weights, num_classes=num_classes)
     model.to(device)
 
     if args.distributed and args.sync_bn:
@@ -589,6 +457,7 @@ def get_args_parser(add_help=True):
                         help="Mean of train database, float or tuple for RGB.")
     parser.add_argument("--std", default=None, type=float,
                         help="Standart deviation of train database, float or tuple for RGB.")
+    parser.add_argument("--vitab", default= True, type=bool, help="activate vitabnet for multimodal training.")
     return parser
 
 

@@ -7,6 +7,14 @@ from sklearn.metrics import ConfusionMatrixDisplay, classification_report, \
 from torch.utils.tensorboard import SummaryWriter
 import json
 
+def start_tensor_board(args):
+    writer = SummaryWriter(f'runs/{args.outname}')
+    return writer
+
+def write_args_to_board(writer, args):
+    board_arguments = pretty_json(vars(args))
+    writer.add_text("Training Arguments", board_arguments)
+
 #helper function to show an image
 # (used in the `plot_classes_preds` function below)
 def matplotlib_imshow(img, one_channel=False):
@@ -22,8 +30,9 @@ def matplotlib_imshow(img, one_channel=False):
 # get some random training images
 def write_batch_to_board(trainloader,grayscale, writer):
     dataiter = iter(trainloader)
-    images, labels = next(dataiter)
+    data, *_ = next(dataiter)
     # create grid of images}
+    images = data[0]
     print(images.shape)
     img_grid = torchvision.utils.make_grid(images)
     print(img_grid.shape)
@@ -69,12 +78,6 @@ def write_cm_to_board(probs, trues, classes, writer):
 def pretty_json(hp):
   json_hp = json.dumps(hp, indent=2)
   return "".join("\t" + line for line in json_hp.splitlines(True))
-
-def start_tensor_board(args):
-    writer = SummaryWriter(f'runs/{args.outname}')
-    board_arguments = pretty_json(vars(args))
-    writer.add_text("Training Arguments", board_arguments)
-    return writer
 
 def format_classification_report(report):
     # Split the report into lines
@@ -258,3 +261,4 @@ def write_roc_to_board(probs, trues, classes, writer):
 
     pr_plot = plot_roc_curve(probs, true_encoded, classes)
     writer.add_figure('ROC Curve', pr_plot)
+

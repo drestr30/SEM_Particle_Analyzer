@@ -8,7 +8,7 @@ from torchsummary import summary
 class ViTabNet(nn.Module):
     def __init__(self, num_classes, dropout_prob=0.5):
         super(ViTabNet, self).__init__()
-        self.tabular_fc1 = nn.Linear(10, 32) ## add re
+        self.tabular_fc1 = nn.Linear(9, 32) ## add re
         self.tabular_fc2 = nn.Linear(32, 64)
         self.tabular_fc3 = nn.Linear(64, 128)
 
@@ -25,8 +25,9 @@ class ViTabNet(nn.Module):
         self.dropout = nn.Dropout(dropout_prob)
         self.fc1 = nn.Linear(256, 128)
         self.fc2 = nn.Linear(128, num_classes)
+        self.softmax = nn.Softmax()
 
-    def forward(self, x_tabular, x_visual):
+    def forward(self, x_visual, x_tabular):
         # Process tabular data
         x_tabular = self.tabular_fc1(x_tabular)
         x_tabular = nn.ReLU()(x_tabular)
@@ -50,16 +51,16 @@ class ViTabNet(nn.Module):
         x = self.fc1(x)
         x = nn.ReLU()(x)
         x = self.fc2(x)
-        x = nn.Softmax(x)
+        x = self.softmax(x)
         return x
 
 # Example usage
 model = ViTabNet(num_classes=10).cuda()
 x_image = torch.ones([1, 3, 224,224])
-x_table = torch.ones([1, 10])
-summary(model, input_data=(x_table, x_image))
+x_table = torch.ones([1, 9])
+summary(model, input_data=(x_image, x_table))
 
-output = model( x_table.cuda(), x_image.cuda())
+output = model(x_image.cuda(), x_table.cuda())
 print(output)
 # optimizer = optim.Adam(model.parameters(), lr=0.001)
 # criterion = nn.CrossEntropyLoss()

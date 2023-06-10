@@ -7,11 +7,11 @@ classifier = classification.InferenceModel(model_path=classification.model_path,
                                            labels=classification.labels)
 
 def run_detection(sem_img, **args):
-    crops, props, mask, display = detect_and_crop(sem_img,
+    crops, props, displays = detect_and_crop(sem_img,
                                     crop_h=args.get('crop_h', None),
                                     threshold=args.get('threshold', 127))
 
-    return crops, props, mask, display
+    return crops, props, displays
 
 def run_classification(images):
     clasifications = []

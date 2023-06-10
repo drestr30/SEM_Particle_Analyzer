@@ -3,7 +3,7 @@ from PIL import Image
 import numpy as np
 from io import BytesIO
 from main import run_classification, run_detection
-from detection import remove_sem_label, create_mask
+from detection import remove_sem_label, create_mask, process_sem_label
 import pandas as pd
 import plotly.express as px
 
@@ -32,9 +32,12 @@ def download_image(img):
 def on_label_change():
     img = remove_sem_label(np.array(st.session_state.og_image),
                                       crop_h=st.session_state.label_slider)
+    _, label = process_sem_label(np.array(st.session_state.og_image),
+                                      crop_h=st.session_state.label_slider)
     img = Image.fromarray(img)
     st.session_state.removed_image = img
     imageLocation.image(img)
+    labelLocation.image(Image.fromarray(label))
     # return img
 
 def on_threshold_change():
@@ -56,14 +59,19 @@ with tab1:
     # on_change=on_label_change)
     th_value = st.slider("Fix Thrshold value:", min_value=0, max_value=255,
                          value=127, key='th_slider')
+
     col1, col2 = st.columns(2)
     if upload is not None:
         image = Image.open(upload)
+
+        # st.image(image)
+
         col1.write("Original Image :camera:")
         imageLocation = col1.empty()
         st.session_state.og_image = image
 
         # _, props, mask, _ = detect_and_crop(np.array(image))
+
         img = remove_sem_label(np.array(image))
         mask = create_mask(img)
         mask = Image.fromarray(mask)
@@ -71,6 +79,10 @@ with tab1:
 
         col2.write("Fixed Image :wrench:")
         maskLocation = col2.empty()
+
+        pixel_dx, sem_label_img = process_sem_label(np.array(image))
+        labelLocation = st.empty()
+        st.session_state.label = sem_label_img
 
         st.sidebar.markdown("\n")
 
@@ -81,16 +93,17 @@ with tab1:
                                    "fixed.png", "image/png")
 
 with tab2:
+    scale = st.sidebar.number_input("Relative lenght of sem image line", step=1)
     dct_button = st.sidebar.button('Continue', key='detect_botton')
     if upload is not None:
         image = Image.open(upload)
-        particles, props, mask, display = run_detection(np.array(image),
+        particles, props, displays = run_detection(np.array(image),
                                             crop_h= st.session_state.label_slider,
-                                            threshold= st.session_state.th_slider)
+                                            threshold= st.session_state.th_slider,
+                                            scale= scale)
 
         col1, col2, col3 = st.columns([2, 1, 1])
-
-        col1.image(Image.fromarray(display))
+        col1.image(Image.fromarray(displays['display']))
 
         if dct_button:
             classifications = run_classification(particles)

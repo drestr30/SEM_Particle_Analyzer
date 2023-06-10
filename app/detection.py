@@ -3,7 +3,7 @@ import numpy as np
 from skimage.measure import label, regionprops, regionprops_table
 import argparse
 
-def detect_and_crop(img, **args):
+def detect_and_crop(sem_img, **args):
     """
     Detects objects in an input image and crops them.
 
@@ -17,13 +17,15 @@ def detect_and_crop(img, **args):
         The second element is a binary mask of the input image, used to
         detect the objects.
     """
-    img = remove_sem_label(img, crop_h=args.get('crop_h', None))
+    img = remove_sem_label(sem_img, crop_h=args.get('crop_h', None))
+    pixel_dx, sem_label_img = process_sem_label(sem_img, scale=args.get('scale', 50),
+                                  crop_h= args.get('crop_h', None))
     mask = create_mask(img, **args)
 
     lbl_0 = label(mask)
     bboxes, mask = detect_from_mask(lbl_0, mask)
 
-    props = create_props_table(lbl_0, img)
+    props = create_props_table(lbl_0, img, pixel_dx)
 
     crops = []
     display = img.copy()
@@ -47,8 +49,9 @@ def detect_and_crop(img, **args):
         cropped = gray2rgb(cropped).astype(np.uint8)
         crops.append(cropped)
 
-    return crops, props, mask, display
-
+    return crops, props, {'mask' : mask,
+                          'display': display,
+                          'label': sem_label_img}
 
 def create_mask(img, **args):
     mask = smooth_and_trhesh(img, threshold=args.get('threshold'))
@@ -74,6 +77,59 @@ def gray2rgb(gray):
     img[:, :, 2] = gray
     return img
 
+
+def detect_longest_horizontal_line(im):
+    # if len(im.shape) < 3: # image is 3dimension
+    gray = im
+    image = cv.cvtColor(im, cv.COLOR_GRAY2BGR)
+    # else:
+    # image = im
+    # gray = cv.cvtColor(im, cv.COLOR_BGR2GRAY)
+
+    max_lenght = 1024
+    # Apply Canny edge detection
+    edges = cv.Canny(gray, 150, 300, apertureSize=3) # 50 150
+
+    # Apply Hough line transform
+    lines = cv.HoughLinesP(edges, 1, np.pi / 180, threshold=100,
+                            minLineLength=30, maxLineGap=5)
+
+    # Find the longest horizontal line
+    longest_line_length = 0
+    longest_line = None
+
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        line_length = abs(x2 - x1)
+
+        if line_length > longest_line_length and line_length < max_lenght:
+            longest_line_length = line_length
+            longest_line = line
+
+    # Draw the longest line on the image (optional)
+    if longest_line is not None:
+        x1, y1, x2, y2 = longest_line[0]
+        cv.line(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+    return longest_line_length, image
+
+def process_sem_label(img, scale= 50, crop_h= None):
+    h, w = img.shape
+    if h > w:
+        output = img[w:, :]
+    else:
+        output = img[h - 30:, :]
+
+    if crop_h:
+        off = 5
+        h, w = img.shape
+        output = img[h - crop_h+ off: h - off, :]
+
+    line_lenght, label_img = detect_longest_horizontal_line(output)
+    pixel_dx = scale/line_lenght
+    return pixel_dx, label_img
+
+
 def remove_sem_label(img, crop_h: int =None):
     """
     This function removes the label in the bottom part of the image, SEM images are original squared,
@@ -87,7 +143,7 @@ def remove_sem_label(img, crop_h: int =None):
     """
     if crop_h:
         h, w = img.shape
-        output = img[:h - crop_h]  # image is square, lower portion is removed cliping
+        output = img[:h - crop_h, :]
     else: #if micrograph is square
         h, w = img.shape
         output = img[:w, :]
@@ -105,9 +161,9 @@ def smooth_and_trhesh(img, kernel=None, threshold=127):
     numpy.ndarray: The binary inverse thresholded image after smoothing.
     
     Example:
-    >>> import cv2
-    >>> img = cv2.imread("image.jpg", 0)
-    >>> smooth_and_thresh(img)
+    # >>> import cv2
+    # >>> img = cv2.imread("image.jpg", 0)
+    # >>> smooth_and_thresh(img)
     """
     if not kernel:
         # Creating the kernel with numpy
@@ -143,7 +199,7 @@ def apply_morph(img, dilate = 0, closing = 0 ):
     
     return morphed
 
-def create_props_table(lbl_0, intensity_image):
+def create_props_table(lbl_0, intensity_image, dx):
 
     # lbl_0 = label(mask)
 
@@ -153,6 +209,7 @@ def create_props_table(lbl_0, intensity_image):
 
 
     props_table = regionprops_table(lbl_0, intensity_image=intensity_image,
+                                    spacing= dx,
                                     properties=('intensity_mean',
                                                 'solidity',
                                                 'perimeter',

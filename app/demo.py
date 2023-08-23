@@ -21,6 +21,8 @@ if 'removed_image' not in st.session_state:
     st.session_state['removed_image'] = None
 if 'mask' not in st.session_state:
     st.session_state['mask'] = None
+if 'particles' not in st.session_state:
+    st.session_state['particles'] = None
 
 # Download the fixed image
 def download_image(img):
@@ -51,7 +53,7 @@ def on_threshold_change():
 
 upload = st.sidebar.file_uploader("Upload an image", type=["png", "jpg", "jpeg", 'tif'])
 
-tab1, tab2, tab3 = st.tabs(["Preprocess", "Results", "Owl"])
+tab1, tab2, tab3 = st.tabs(["Preprocess", "Morphology", "Chemical"])
 
 with tab1:
     th_value = st.slider("Remove SEM label:", min_value=0, max_value=150,
@@ -93,38 +95,45 @@ with tab1:
                                    "fixed.png", "image/png")
 
 with tab2:
-    scale = st.sidebar.number_input("Relative lenght of sem image line", step=1)
+    scale = st.sidebar.number_input("Relative lenght of sem image line",
+                                    value=0, step=1)
     dct_button = st.sidebar.button('Continue', key='detect_botton')
-    if upload is not None:
+    col1, col2 = st.columns([1, 1])
+    if upload is not None and scale !=  0:
         image = Image.open(upload)
         particles, props, displays = run_detection(np.array(image),
                                             crop_h= st.session_state.label_slider,
                                             threshold= st.session_state.th_slider,
                                             scale= scale)
 
-        col1, col2, col3 = st.columns([2, 1, 1])
+        st.session_state.particles = particles
         col1.image(Image.fromarray(displays['display']))
 
-        if dct_button:
-            classifications = run_classification(particles)
+        fig = px.histogram(props, x="area")
+        col2.plotly_chart(fig, use_container_width=True)
+        st.dataframe(pd.DataFrame(props))
+
+with tab3:
+    col1, col2 = st.columns([1, 3])
+
+    if dct_button:
+        classifications = run_classification(particles)
 
 
-            df = pd.DataFrame.from_dict(classifications)#.drop('id')
-            col2.dataframe(df)
+        df = pd.DataFrame.from_dict(classifications)#.drop('id')
+        col1.dataframe(df)
 
-            class_counts = df['group'].value_counts().reset_index()
-            fig = px.bar(class_counts, x='index', y='group',
-                         title='Count for particles per group')
-            fig.update_layout(height=500, width=250)
+        class_counts = df['group'].value_counts().reset_index()
+        fig = px.bar(class_counts, x='index', y='group',
+                     title='Count for particles per group')
+        # fig.update_layout(height=500, width=250)
 
-            col3.plotly_chart(fig)
+        col2.plotly_chart(fig)
+
+        fig = px.pie(df, names='group')
+        st.plotly_chart(fig)
 
 
-
-            fig = px.pie(df, names='group')
-            st.plotly_chart(fig)
-
-            st.dataframe(pd.DataFrame(props))
 
 
 

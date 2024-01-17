@@ -4,16 +4,19 @@ import numpy as np
 from io import BytesIO
 from main import run_classification, run_detection
 from detection import remove_sem_label, create_mask, process_sem_label
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
+import zipfile
+import os
 
-st.set_page_config(layout="wide", page_title="Image Background Remover")
+st.set_page_config(layout="wide", page_title="Sem particle Analyzer")
 
 st.write("## Detect and classsify particles in SEM images")
 st.write(
     "Try uploading an image"
 )
-st.sidebar.write("## Upload and download :gear:")
+st.sidebar.write("## Upload your SEM Micrographs :gear:")
 
 if 'og_image' not in st.session_state:
     st.session_state['og_image'] = None
@@ -25,11 +28,23 @@ if 'particles' not in st.session_state:
     st.session_state['particles'] = None
 
 # Download the fixed image
-def download_image(img):
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    byte_im = buf.getvalue()
-    return byte_im
+def save_image(img, img_name):
+    # buf = BytesIO()
+    # img.save(buf, format="PNG")
+    # byte_im = buf.getvalue()
+    img.save(img_name)
+    return img_name
+
+def create_zip(files, zip_name):
+    with zipfile.ZipFile(zip_name, 'w') as zipf:
+        for file in files:
+            zipf.write(file)
+
+def convert_df(df):
+    csv_name = './csv_data.csv'
+    df.to_csv(csv_name, index=True)
+    return csv_name
+
 
 def on_label_change():
     img = remove_sem_label(np.array(st.session_state.og_image),
@@ -53,17 +68,19 @@ def on_threshold_change():
 
 upload = st.sidebar.file_uploader("Upload an image", type=["png", "jpg", "jpeg", 'tif'])
 
-tab1, tab2, tab3 = st.tabs(["Preprocess", "Morphology", "Chemical"])
+th_value = st.sidebar.slider("Remove SEM label:", min_value=0, max_value=150,
+                     value=100, key='label_slider')
+# on_change=on_label_change)
+th_value = st.sidebar.slider("Fix Thrshold value:", min_value=0, max_value=255,
+                     value=127, key='th_slider')
+
+tab1, tab2, tab3, tab4 = st.tabs(["Preprocess", "Morphology", "Chemical", "Docs"])
 
 with tab1:
-    th_value = st.slider("Remove SEM label:", min_value=0, max_value=150,
-                         value=100, key='label_slider')
-    # on_change=on_label_change)
-    th_value = st.slider("Fix Thrshold value:", min_value=0, max_value=255,
-                         value=127, key='th_slider')
 
     col1, col2 = st.columns(2)
     if upload is not None:
+        print(upload)
         image = Image.open(upload)
 
         # st.image(image)
@@ -91,8 +108,6 @@ with tab1:
         on_label_change()
         on_threshold_change()
 
-        st.sidebar.download_button("Download Mask", download_image(mask),
-                                   "fixed.png", "image/png")
 
 with tab2:
     scale = st.sidebar.number_input("Relative lenght of sem image line",
@@ -109,35 +124,58 @@ with tab2:
         st.session_state.particles = particles
         col1.image(Image.fromarray(displays['display']))
 
-        fig = px.histogram(props, x="area")
+        fig = px.histogram(props, x="area", title="Area distribution of particles")
         col2.plotly_chart(fig, use_container_width=True)
-        st.dataframe(pd.DataFrame(props))
+        props_df = pd.DataFrame(props)
+        st.dataframe(props_df)
+
 
 with tab3:
-    col1, col2 = st.columns([1, 3])
-
+    col1, col2 = st.columns([1, 1])
+    col3, col4 = st.columns([1, 1])
     if dct_button:
+        display_img = Image.fromarray(displays['display'])
+        col1.image(display_img)
+
         classifications = run_classification(particles)
-
-
         df = pd.DataFrame.from_dict(classifications)#.drop('id')
-        col1.dataframe(df)
+        col2.dataframe(df)
+
+        ## graphics
 
         class_counts = df['group'].value_counts().reset_index()
-        fig = px.bar(class_counts, x='index', y='group',
+        fig = px.bar(class_counts, x='group', y='count',
                      title='Count for particles per group')
-        # fig.update_layout(height=500, width=250)
+        col3.plotly_chart(fig)
 
-        col2.plotly_chart(fig)
+        fig = px.pie(df, names='group', title="Groups distribution")
+        col4.plotly_chart(fig)
 
-        fig = px.pie(df, names='group')
-        st.plotly_chart(fig)
+        # prepare data for download.
+        props_df['group'] = df["group"]
+        props_df["prob"] = df["prob"]
 
+        csv = convert_df(props_df)
 
+        zip_file_name = "downloaded_files.zip"
+        create_zip([csv, save_image(display_img, 'detections.png'),
+                    save_image(st.session_state.mask, "mask.png")],
+                    zip_file_name)
 
+        # Provide a download link for the zip file
+        st.sidebar.download_button(label="Download Zip File",
+                           data=open(zip_file_name, "rb").read(),
+                           file_name= "data.zip",
+                            key="download_zip",
+                           mime="application/zip"
+                           )
 
+        # Cleanup: Remove the zip file after download
+        # os.remove(zip_file_name)
 
-
-
+with tab4:
+    components.html("""<iframe src="https://scribehow.com/embed/SEM_Particle_Analyzer__User_Guide__7of25zfCT2mO6V4Reymr3w" 
+    width="100%" height="640" allowfullscreen frameborder="0"></iframe>""",
+                    height=640)
 
 

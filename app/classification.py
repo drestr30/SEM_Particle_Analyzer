@@ -5,7 +5,7 @@ from torchvision import transforms
 from torchvision.models import resnet18
 
 labels = ['Biogenic_Organic', 'Metallic', 'Mineral', 'Tire wear']
-model_path = '/media/lecun/HD/Expor2/Particle-classifier/app/export2_model.pth'
+model_path = '/code/export2_model.pth'
 
 def clasiffy_img(img, model):
     preprocesing = get_preprocessing()
@@ -79,7 +79,7 @@ class ResNet18(nn.Module):
 
     def __init__(self, out_size, include_top=True):
         super(ResNet18, self).__init__()
-        self.model = resnet18(pretrained=False)
+        self.model = resnet18(weights=None)
         num_ftrs = self.model.fc.in_features
 
         if include_top:

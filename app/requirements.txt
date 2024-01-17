@@ -2,7 +2,7 @@ torch
 torchvision
 opencv-python
 scikit-image
-streamlit
+streamlit==1.25
 plotly
 pandas
 

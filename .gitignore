@@ -136,3 +136,8 @@ models/
 
 #tensorboard runs
 runs/
+
+# Aditional files
+app/*.png
+app/*.zip
+app/*.csv
